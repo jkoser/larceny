@@ -904,6 +904,7 @@
 
     ;; Only expands while t is a user macro invocation.
     ;; Used by expand-lambda to detect internal definitions.
+    ;; Also used by scan-sequence.
 
     (define (head-expand t)
       (fluid-let ((*trace* (cons t *trace*)))
@@ -1644,13 +1645,12 @@
                              form)))             ; end of new code for ; [R7RS]
 
     (define (check-toplevel body-type type form)
-#;
-      (if (memq 'define-library (list body-type type))                  ; FIXME
-          (begin (display "check-toplevel: ")
-                 (write (list body-type type))
-                 (newline)))
       (and (not (eq? body-type 'toplevel))
-           (not (eq? body-type 'define-library))                       ; [R7RS]
+           (not (and (eq? type 'import)                                ; [R7RS]
+                     (or (and (eq? body-type 'program)                 ; [R7RS]
+                              (not (eq? (larceny:execution-mode)       ; [R7RS]
+                                        'r6rs)))                       ; [R7RS]
+                         (eq? body-type 'define-library))))            ; [R7RS]
            (memq type '(import program library
                         define-library))                               ; [R7RS]
            (syntax-violation type
@@ -1665,6 +1665,7 @@
                  (newline)))
       (and (not (eq? body-type 'toplevel))
            (duplicate? id common-env)
+           (eq? (larceny:execution-mode) 'r6rs)
            (syntax-violation type "Redefinition of identifier in body" form id))
       (check-used id body-type form)
       (and (not (memq body-type `(toplevel program define-library)))    ; FIXME
@@ -2093,15 +2094,18 @@
                              (*current-library*  name)
                              (*syntax-reflected* #f))       ; +++ space
 
+                   (if (or (eq? library-type 'define-library)          ; [R7RS]
+                           (and (not (eq? (larceny:execution-mode)     ; [R7RS]
+                                          'r6rs))                      ; [R7RS]
+                                (eq? library-type 'program)))          ; [R7RS]
+                       (env-import! keyword                            ; [R7RS]
+                                    (make-r7rs-library-language)       ; [R7RS]
+                                    *usage-env*))                      ; [R7RS]
+                   (env-import! keyword imports *usage-env*)
                    (import-libraries-for-expand
                     imported-libraries
                     (map not imported-libraries)
                     0)
-                   (if (eq? library-type 'define-library)              ; [R7RS]
-                       (env-import! keyword
-                                    (make-r7rs-library-language)
-                                    *usage-env*))
-                   (env-import! keyword imports *usage-env*)
 
                    (let ((initial-env-table *env-table*))   ; +++ space
                      (scan-sequence
@@ -2288,6 +2292,7 @@
               (lambda (library-ref levels more-imports)
                 (loop (cdr specs)
                       ;; library-ref = #f if primitives spec
+                      ;; FIXME: that's not true; see below
                       (if library-ref
                           (cons (cons library-ref levels)
                                 imported-libraries)
@@ -2298,7 +2303,7 @@
     ;;                 (<level> ...)
     ;;                 ((<local name> . <binding>) ...)
     ;; where <level> ::= <integer>
-    ;; #f is returned for library name in case of primitives.
+    ;; FIXME: For primitives, (larceny PRIMITIVES) is the library name.
 
     (define (scan-import-spec spec)
 
@@ -2319,11 +2324,17 @@
                         names))
 
             (match import-set
+              ;; FIXME: (primitives foo bar) should be a legal library name
               (((syntax primitives) (? identifier? xs) ___)
                (values #f
                        levels
                        (map (lambda (mapping)
-                              (cons (car mapping) (make-binding 'variable (cdr mapping) levels #f '())))
+                              (cons (car mapping)
+                                    (make-binding 'variable
+                                                  (cdr mapping)
+                                                  levels
+                                                  #f
+                                                  '(larceny PRIMITIVES))))
                             (adjuster (map (lambda (name) (cons name name))
                                            (syntax->datum xs))))))
               (((syntax only) set (? identifier? xs) ___)
@@ -2363,11 +2374,12 @@
                                                      (else (car mapping)))
                                                (cdr mapping)))
                                        mappings))))))
-              (((syntax primitives) . -) (invalid-form import-set))
-              (((syntax only)       . -) (invalid-form import-set))
-              (((syntax except)     . -) (invalid-form import-set))
-              (((syntax prefix)     . -) (invalid-form import-set))
-              (((syntax rename)     . -) (invalid-form import-set))
+              ;; Library names could begin with these (ticket #773).
+;             (((syntax primitives) . -) (invalid-form import-set))
+;             (((syntax only)       . -) (invalid-form import-set))
+;             (((syntax except)     . -) (invalid-form import-set))
+;             (((syntax prefix)     . -) (invalid-form import-set))
+;             (((syntax rename)     . -) (invalid-form import-set))
               (-
                (let ((library-ref (library-ref import-set)))
                  (if library-ref
@@ -2873,16 +2885,32 @@
     ;; For importing and evaluating stuff in the persistent 
     ;; interactive environment, see REPL above.
 
-    ;; FIXME:  Since expand-toplevel-sequence calls eval on every
-    ;; library in the sequence, the following procedure calls eval
-    ;; on every library twice.  That can double the compile time.
-    
+    ;; NOTE: expand-toplevel-sequence calls eval on every library
+    ;; in the sequence.  (It calls scan-sequence, which calls
+    ;; expand-library, which calls expand-library-or-program,
+    ;; which calls eval on the expanded library.)  That's why
+    ;; run-r6rs-sequence calls eval only on the expressions
+    ;; obtained by expanding the program, if present.
+    ;; See ticket #655.
+
     (define (run-r6rs-sequence forms)
       (with-toplevel-parameters
        (lambda ()
-         (for-each (lambda (exp) (eval exp (interaction-environment)))
-                   (expand-toplevel-sequence (normalize forms))))))
-    
+         (let* ((forms (normalize forms)))
+           (call-with-values
+            (lambda ()
+              (partition (lambda (form)
+                           (and (pair? form)
+                                (eq? 'program (car form))))
+                         forms))
+            (lambda (pgms libs)
+              (expand-toplevel-sequence libs)
+              (if (not (null? pgms))
+                  (let* ((exps (expand-toplevel-sequence pgms)))
+                    (for-each (lambda (exp)
+                                (eval exp (interaction-environment)))
+                              exps)))))))))
+
     (define (run-r6rs-program filename)
       (run-r6rs-sequence (read-file filename)))
 

@@ -74,6 +74,21 @@
              (number->string minor))))
     s))
 
+(define (larceny:declared-features)
+  (if (not *larceny:declared-features*)
+      (let* ((s (string-append "(" (larceny:get-feature 'r7features) ")"))
+             (p (open-input-string s)))
+        (set! *larceny:declared-features* (read p))
+        (close-input-port p)))
+  *larceny:declared-features*)
+
+(define *larceny:declared-features* #f)
+
+(define larceny:current-declared-features
+  (make-parameter "larceny:current-declared-features"
+                  (larceny:declared-features)
+                  list?))
+
 ;;; FIXME: keep this in sync with src/Lib/Common/system-interface.sch
 
 (define (larceny:evaluate-feature feature)
@@ -90,7 +105,7 @@
                           '(r7rs r7r6 r6rs err5rs))))
           ((larceny complex exact-closed exact-complex ieee-float ratios)
            #t)
-          ((larceny-0.98 larceny-0.99 larceny-2.0)
+          ((larceny-0.98 larceny-0.99 larceny-1.3 larceny-1.5 larceny-2.0)
            ;; FIXME: should strip off trailing beta version, etc
            (let* ((major (larceny:get-feature 'larceny-major-version))
                   (minor (larceny:get-feature 'larceny-minor-version))
@@ -146,6 +161,7 @@
           (else
            (or (eq? feature (larceny:name-of-this-implementation))
                (eq? feature (larceny:name-of-this-implementation-version))
+               (memq feature (larceny:current-declared-features))
                (let ((s (symbol->string feature)))
                  (and (< 5 (string-length s))
                       (string-ci=? "srfi-" (substring s 0 5))
@@ -241,6 +257,7 @@
                   (caddr standard-features)  ; larceny
                   larceny-version)
             (cdddr standard-features)
+            (larceny:current-declared-features)
             (map car (larceny:available-source-libraries)))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;

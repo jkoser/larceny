@@ -347,14 +347,14 @@ void primitive_sysfeature( word v /* a vector of sufficient length */ )
       mode = 1;
     if (command_line_options.r6rs)
       mode = 2;
-    if (command_line_options.ignore1)  // scheme-script is now an R7RS mode
-      mode = 3;
     if (command_line_options.r6slow)
       mode = 4;
     if (command_line_options.r7rs)
       mode = 5;
     if (command_line_options.r7r6)
       mode = 6;
+    if (command_line_options.ignore1)  // scheme-script is now an R7RS mode
+      mode = 3;
     vector_set( v, 0, fixnum( mode ) );
     break;
   }
@@ -407,6 +407,40 @@ void primitive_sysfeature( word v /* a vector of sufficient length */ )
   case 18 : /* transcoder */
     vector_set( v, 0, fixnum( command_line_options.transcoder ) );
     break;
+  case 19 : /* r6path2 */ {
+    char *p;
+    word *q;
+    int l;
+
+    p = command_line_options.r6path2;
+    if (p == 0) {
+      globals[ G_RESULT ] = FALSE_CONST;
+      return;
+    }
+    l = strlen( p );
+    q = (word*)gc_allocate( the_gc(globals), (4 + l), 0, 1 );
+    *q = mkheader( l, BV_HDR );
+    memcpy( string_data( q ), p, l );
+    vector_set ( v, 0, (word)tagptr( q, BVEC_TAG ) );
+    break;
+  }
+  case 20 : /* r7features */ {
+    char *p;
+    word *q;
+    int l;
+
+    p = command_line_options.r7features;
+    if (p == 0) {
+      globals[ G_RESULT ] = FALSE_CONST;
+      return;
+    }
+    l = strlen( p );
+    q = (word*)gc_allocate( the_gc(globals), (4 + l), 0, 1 );
+    *q = mkheader( l, BV_HDR );
+    memcpy( string_data( q ), p, l );
+    vector_set ( v, 0, (word)tagptr( q, BVEC_TAG ) );
+    break;
+  }
   default : 
     panic_exit( "Unknown code %d passed to primitive_sysfeature", nativeint( vector_ref( v, 0 ) ) );
   }
